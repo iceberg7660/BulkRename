@@ -155,6 +155,8 @@ class RenameApp(QMainWindow):
             "* 本程序不会更改文件的格式和内容，保留原文件后缀名。\n"
             "* 匹配原理：将名单匹配依据列的值与文件名字符串比对，\n"
             "  文件名中包含该值即视为匹配。\n"
+            "* 匹配依据列若有重复值，仅最先出现的一行参与重命名，\n"
+            "  其余重复行跳过，重命名结束后弹窗给出详细说明。\n"
             "* 本程序仅供学习交流使用，不得用于商业用途。\n"
         )
         QMessageBox.about(self, '简介', about_text)
@@ -228,6 +230,7 @@ class RenameApp(QMainWindow):
                     row_dict[col_name] = val
                 # 跳过全空行
                 if any(v is not None for v in row_dict.values()):
+                    row_dict['__excel_row__'] = r  # 内部键：记录 Excel 行号，用于结果报告
                     self.roster_rows.append(row_dict)
 
             if not self.roster_rows:
@@ -247,6 +250,9 @@ class RenameApp(QMainWindow):
 
             # ── 刷新文件名组成下拉框 ──
             self._sync_combo_count_to_fields()
+
+            # ── 检测匹配依据列是否有重复值（有则弹窗提醒）──
+            self._check_match_column_duplicates()
 
             # ── 状态提示 ──
             header_status = '有表头' if self.roster_has_headers else '无表头'
@@ -340,6 +346,90 @@ class RenameApp(QMainWindow):
     def _on_match_column_changed(self, index):
         if index >= 0:
             self.roster_match_column = index
+            # 切换匹配依据列后立即检测该列是否有重复值
+            self._check_match_column_duplicates()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 匹配依据列重复检测
+    # ═══════════════════════════════════════════════════════════════
+
+    def _normalize_match_value(self, raw):
+        """归一化匹配依据列的单元格值。
+
+        与重命名匹配逻辑保持一致：None → 空串；整数值的 float → 整数字符串
+        （避免 Excel 数字列的 2021115006.0 与字符串 2021115006 被判为不同值）。
+        """
+        if raw is None:
+            return ''
+        if isinstance(raw, float) and raw == int(raw):
+            return str(int(raw))
+        return str(raw)
+
+    def _find_duplicate_match_values(self):
+        """检测当前匹配依据列中的重复值。
+
+        Returns:
+            dict: {匹配值: [在 roster_rows 中的行索引列表]}，
+            仅包含出现次数大于 1 的值，按首次出现顺序排列。
+        """
+        if not self.roster_columns or not self.roster_rows:
+            return {}
+        if self.roster_match_column >= len(self.roster_columns):
+            return {}
+        match_col_name = self.roster_columns[self.roster_match_column]
+
+        groups = {}
+        order = []
+        for idx, row_data in enumerate(self.roster_rows):
+            val = self._normalize_match_value(row_data.get(match_col_name))
+            if not val:
+                continue  # 空值不参与重复检测（它们本来就匹配不到文件）
+            if val not in groups:
+                groups[val] = []
+                order.append(val)
+            groups[val].append(idx)
+
+        return {v: groups[v] for v in order if len(groups[v]) > 1}
+
+    def _check_match_column_duplicates(self):
+        """导入名单 / 切换匹配依据列后，检测该列重复值并弹窗提醒。"""
+        duplicates = self._find_duplicate_match_values()
+        if not duplicates:
+            return
+
+        match_col_name = self.roster_columns[self.roster_match_column]
+        lines = []
+        items = list(duplicates.items())
+        for i, (val, row_indices) in enumerate(items):
+            if i >= 10:
+                lines.append(f'... 及其他 {len(items) - 10} 个重复值')
+                break
+            excel_rows = '、'.join(
+                str(self.roster_rows[ri].get('__excel_row__', '?')) for ri in row_indices)
+            lines.append(f'「{val}」出现 {len(row_indices)} 次（Excel 第 {excel_rows} 行）')
+
+        msg = (
+            f'检测到匹配依据列「{match_col_name}」中存在重复值：\n\n'
+            + '\n'.join(lines)
+            + '\n\n默认处理规则：每个重复值仅名单中最先出现的一行参与重命名，'
+            '其余重复行将被跳过（不做处理）。\n'
+            '重命名结束后的结果弹窗中会给出详细说明。'
+        )
+        QMessageBox.warning(self, '匹配依据列存在重复', msg)
+
+    def _describe_row(self, row_data):
+        """生成名单行的可读描述（用于结果报告，排除内部键）。"""
+        excel_row = row_data.get('__excel_row__')
+        parts = []
+        for k, v in row_data.items():
+            if k == '__excel_row__':
+                continue
+            s = self._normalize_match_value(v)
+            parts.append(f'{k}={s if s else "（空）"}')
+        desc = '，'.join(parts)
+        if excel_row is not None:
+            return f'Excel 第 {excel_row} 行（{desc}）'
+        return desc
 
     # ═══════════════════════════════════════════════════════════════
     # 文件夹选择
@@ -599,20 +689,22 @@ class RenameApp(QMainWindow):
             match_col_name = self.roster_columns[self.roster_match_column] \
                 if self.roster_match_column < len(self.roster_columns) else self.roster_columns[0]
 
-            renamed_count = 0
-            unmatched_rows = []
+            # ── 匹配值重复预检：每个重复值仅第一行参与重命名，其余跳过 ──
+            duplicate_groups = self._find_duplicate_match_values()
+            skipped_dup_indices = set()
+            for row_indices in duplicate_groups.values():
+                skipped_dup_indices.update(row_indices[1:])
 
-            for row_data in self.roster_rows:
-                raw = row_data.get(match_col_name)
-                if raw is None:
-                    unmatched_rows.append(str(row_data))
+            row_outcomes = {}  # roster_rows 索引 → 该行处理结果（success/error/unmatched/skipped_dup）
+
+            for row_idx, row_data in enumerate(self.roster_rows):
+                if row_idx in skipped_dup_indices:
+                    row_outcomes[row_idx] = {'status': 'skipped_dup'}
                     continue
-                if isinstance(raw, float) and raw == int(raw):
-                    match_value = str(int(raw))
-                else:
-                    match_value = str(raw)
+
+                match_value = self._normalize_match_value(row_data.get(match_col_name))
                 if not match_value:
-                    unmatched_rows.append(str(row_data))
+                    row_outcomes[row_idx] = {'status': 'unmatched'}
                     continue
 
                 matched = False
@@ -633,45 +725,114 @@ class RenameApp(QMainWindow):
 
                         try:
                             os.rename(ori_path, new_path)
-                            renamed_count += 1
+                            row_outcomes[row_idx] = {
+                                'status': 'success', 'ori': name_in_list, 'new': new_name}
                         except Exception as e:
-                            QMessageBox.warning(self, '重命名失败',
-                                                f'文件 {name_in_list} 重命名失败：{str(e)}')
+                            # 不再逐个弹窗，统一汇总到结束后的结果报告
+                            row_outcomes[row_idx] = {
+                                'status': 'error', 'ori': name_in_list, 'error': str(e)}
                         matched = True
                         break
 
                 if not matched:
-                    unmatched_rows.append(str(row_data))
+                    row_outcomes[row_idx] = {'status': 'unmatched'}
 
             # ── 重命名文件夹 ──
+            folder_note = ''
             if new_folder_name:
                 new_folder_path = os.path.join(os.path.dirname(folder_path), new_folder_name)
                 try:
                     os.rename(folder_path, new_folder_path)
                     folder_path = new_folder_path
                 except FileExistsError:
-                    QMessageBox.warning(self, '警告', '重命名的文件夹已经存在')
-                    return
+                    folder_note = f'⚠ 文件夹未能重命名：目标文件夹「{new_folder_name}」已存在。'
                 except FileNotFoundError:
-                    QMessageBox.warning(self, '警告', '文件夹路径无效')
-                    return
+                    folder_note = '⚠ 文件夹未能重命名：文件夹路径无效。'
 
-            # ── 结果报告 ──
-            msg = f'重命名完成！共处理 {renamed_count} 个文件。'
-            if unmatched_rows:
-                unmatched_preview = '\n'.join(unmatched_rows[:5])
-                if len(unmatched_rows) > 5:
-                    unmatched_preview += f'\n... 及其他 {len(unmatched_rows) - 5} 行'
-                msg += f'\n\n以下 {len(unmatched_rows)} 行未能匹配到文件：\n{unmatched_preview}'
-            QMessageBox.information(self, '完成', msg)
+            # ── 结果报告：成功数 / 失败数 / 失败原因 / 重复值处理详情 ──
+            self._show_result_report(match_col_name, duplicate_groups, row_outcomes, folder_note)
 
-            if folder_path:
+            if folder_path and os.path.isdir(folder_path):
                 os.startfile(folder_path)
 
         except FileNotFoundError:
             QMessageBox.warning(self, '警告', '名单文件路径无效')
         except Exception as e:
             QMessageBox.warning(self, '警告', f'发生错误: {str(e)}')
+
+    def _show_result_report(self, match_col_name, duplicate_groups, row_outcomes, folder_note=''):
+        """重命名结束后的汇总弹窗：成功数、失败数、失败原因、重复值处理详情。"""
+        success_items = [(ri, o) for ri, o in row_outcomes.items() if o['status'] == 'success']
+        error_items = [(ri, o) for ri, o in row_outcomes.items() if o['status'] == 'error']
+        unmatched_items = [(ri, o) for ri, o in row_outcomes.items() if o['status'] == 'unmatched']
+        skipped_count = sum(1 for o in row_outcomes.values() if o['status'] == 'skipped_dup')
+        failed_count = len(error_items) + len(unmatched_items) + skipped_count
+
+        lines = [
+            f'名单共 {len(self.roster_rows)} 行',
+            f'成功重命名：{len(success_items)} 个文件',
+            f'未成功：{failed_count} 项（重命名出错 {len(error_items)}、'
+            f'未匹配到文件 {len(unmatched_items)}、因匹配值重复跳过 {skipped_count}）',
+        ]
+
+        # ── 匹配值重复处理详情 ──
+        if duplicate_groups:
+            lines.append('')
+            lines.append(f'【匹配值重复详情】列「{match_col_name}」存在重复值，'
+                         '按规则仅每个重复值最先出现的一行参与重命名：')
+            items = list(duplicate_groups.items())
+            for i, (val, row_indices) in enumerate(items):
+                if i >= 8:
+                    lines.append(f'... 及其他 {len(items) - 8} 个重复值')
+                    break
+                lines.append(f'● 匹配值「{val}」（出现 {len(row_indices)} 次）：')
+                for j, ri in enumerate(row_indices):
+                    excel_row = self.roster_rows[ri].get('__excel_row__', '?')
+                    o = row_outcomes.get(ri, {})
+                    status = o.get('status')
+                    if j == 0:
+                        # 第一个重名行：报告实际结果（成功时写出原名和现名）
+                        if status == 'success':
+                            lines.append(f'  ✓ Excel 第 {excel_row} 行 重命名成功：'
+                                         f'「{o["ori"]}」→「{o["new"]}」')
+                        elif status == 'error':
+                            lines.append(f'  ✗ Excel 第 {excel_row} 行 重命名失败：'
+                                         f'「{o["ori"]}」— {o["error"]}')
+                        else:
+                            lines.append(f'  ✗ Excel 第 {excel_row} 行 未匹配到文件，未重命名')
+                    else:
+                        lines.append(f'  ✗ Excel 第 {excel_row} 行 未处理（与前面重名，已跳过）')
+
+        # ── 重命名出错详情 ──
+        if error_items:
+            lines.append('')
+            lines.append('【重命名出错】')
+            for i, (ri, o) in enumerate(error_items):
+                if i >= 8:
+                    lines.append(f'... 及其他 {len(error_items) - 8} 个')
+                    break
+                excel_row = self.roster_rows[ri].get('__excel_row__', '?')
+                lines.append(f'· Excel 第 {excel_row} 行：文件「{o["ori"]}」— {o["error"]}')
+
+        # ── 未匹配到文件的行 ──
+        if unmatched_items:
+            lines.append('')
+            lines.append('【未匹配到文件的行】')
+            for i, (ri, o) in enumerate(unmatched_items):
+                if i >= 8:
+                    lines.append(f'... 及其他 {len(unmatched_items) - 8} 行')
+                    break
+                lines.append(f'· {self._describe_row(self.roster_rows[ri])}')
+
+        if folder_note:
+            lines.append('')
+            lines.append(folder_note)
+
+        text = '\n'.join(lines)
+        if failed_count > 0:
+            QMessageBox.warning(self, '重命名完成（存在未成功项）', text)
+        else:
+            QMessageBox.information(self, '重命名完成', text)
 
 
 if __name__ == '__main__':
