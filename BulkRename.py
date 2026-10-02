@@ -170,7 +170,7 @@ class RenameApp(QMainWindow):
 
     def select_roster(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, '选择名单文件', '', 'Excel Files (*.xlsx *.xls)')
+            self, '选择名单文件', '', 'Excel Files (*.xlsx)')
         if file_path:
             self.line_roster.setText(file_path)
             self.load_roster(file_path)
