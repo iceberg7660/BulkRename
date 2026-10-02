@@ -141,7 +141,7 @@ class RenameApp(QMainWindow):
     def show_about_dialog(self):
         about_text = (
             "使用方法：\n"
-            "1. 选择名单文件（Excel格式，支持 .xlsx / .xls）。\n"
+            "1. 选择名单文件（Excel格式，支持 .xlsx）。\n"
             "2. 程序自动识别第一行是否为表头，可通过复选框纠正。\n"
             "3. 表头列名或自动生成的列名将作为重命名时可选的字段。\n"
             "4. 选择需要重命名文件的文件夹。\n"
