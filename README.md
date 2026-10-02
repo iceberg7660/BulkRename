@@ -11,6 +11,13 @@
 
 两个版本功能一致。macOS 版支持一键打包为独立 .app，打包好的应用可在 [Releases](https://github.com/iceberg7660/BulkRename/releases) 的 v1.2 中下载。
 
+## 下载
+
+已打包好的版本可在 [Releases](https://github.com/iceberg7660/BulkRename/releases) 中下载：
+
+- **Windows**：`v1.2.exe`（单文件版，双击运行，无需安装 Python）
+- **macOS**：`BulkRename-mac.app.zip`（解压后拖入「应用程序」即可）
+
 ## 功能特点
 
 - **任意多列支持**：不限于学号+姓名两列，Excel 有多少列就支持多少列
@@ -34,7 +41,7 @@ pip install openpyxl PyQt5
 
 ## 使用方法
 
-1. 选择名单文件（Excel 格式，支持 `.xlsx` / `.xls`）
+1. 选择名单文件（Excel 格式，支持 `.xlsx`）
 2. 程序自动识别第一行是否为表头，可通过复选框纠正
 3. 选择匹配依据列（用于在文件名中定位原文件）
 4. 选择需要重命名文件的文件夹
@@ -62,6 +69,7 @@ pip install openpyxl PyQt5
 ## 注意事项
 
 - 本程序不会更改文件的格式和内容，保留原文件后缀名
+- 名单文件仅支持 `.xlsx`：openpyxl 不支持旧版 `.xls` 格式
 - 文件名中如含 Windows 非法字符（`\ / : * ? " < > |`）会自动替换为下划线
 - 本程序仅供学习交流使用，不得用于商业用途
 
