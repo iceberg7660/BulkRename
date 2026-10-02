@@ -2,6 +2,15 @@
 
 基于 PyQt5 的桌面 GUI 程序，读取 Excel 名单，根据名单中某列的值匹配文件夹中的文件名，按用户指定的字段组成规则批量重命名文件。
 
+## 版本
+
+| 版本 | 位置 | 技术栈 |
+| --- | --- | --- |
+| Windows 版（本目录） | `BulkRename.py` | Python + PyQt5 |
+| macOS 版 | [`macos/`](macos/) | Python + PySide6（Qt6） |
+
+两个版本功能一致。macOS 版支持一键打包为独立 .app，打包好的应用可在 [Releases](https://github.com/iceberg7660/BulkRename/releases) 的 v1.2 中下载。
+
 ## 功能特点
 
 - **任意多列支持**：不限于学号+姓名两列，Excel 有多少列就支持多少列
